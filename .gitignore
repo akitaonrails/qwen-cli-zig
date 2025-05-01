@@ -1,0 +1,5 @@
+.aider*
+models
+vendor
+zig-out
+.zig-cache
