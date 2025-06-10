@@ -1,5 +1,7 @@
 # Qwen CLI Zig
 
+**update from 2025-06-10:** Claude Sonnet 4 was released and I tried to see if it could finish this small program. Gemini 2.5 Pro Exp failed, but Sonnet 4 actually finished it. It was not a smooth experience, it required a lot of back and forth, it took a long time to solve the problems, but at least it was able to converge into a workable solution.
+
 This is an attempt at making Gemini 2.5 Pro Exp write usable Zig code. The veredict: do not try unless you have a robust RAG or LoRa solution for the most current Zig documentation or source code. 
 
 It will try to write Zig but it doesn´t know what changed in the most current version. If you try to import C header files, it has a very hard time with type casting, pointer casting and makes frequent type and syntax errors. It is a true knighmare.
@@ -97,7 +99,7 @@ The provided `download_model.sh` script helps download the *original* model file
     ```bash
     ./download_model.sh
     ```
-    This will download the necessary files into the `models/Qwen3-14B-hf` directory.
+    This will download the necessary files into the `models/Qwen3-14B-GGUF` directory.
 
 3.  **Convert the downloaded files to GGUF format:**
     *   **IMPORTANT:** The downloaded files are **NOT** directly usable. You must convert them using the `convert.py` script from the `llama.cpp` project.
@@ -130,17 +132,17 @@ Execute the compiled program, pointing it to the **GGUF file you created** durin
 
 ```bash
 # Example using the converted file name from the instructions above:
-./zig-out/bin/qwen_cli --model models/qwen3-14b-converted.gguf
+./zig-out/bin/qwen_cli --model models/Qwen3-14B-GGUF/Qwen3-14B-Q4_K_M.gguf
 
 # Or provide the full path otherwise:
-./zig-out/bin/qwen_cli --model /path/to/your/qwen3-14b-converted.gguf
+./zig-out/bin/qwen_cli --model /path/to/your/Qwen3-14B-Q4_K_M.gguf
 ```
 
 You can also specify other options:
 
 ```bash
 ./zig-out/bin/qwen_cli \
-  --model /path/to/your/qwen3-14b.Q5_K_M.gguf \
+  --model /path/to/your/Qwen3-14B-Q4_K_M.gguf \
   --system "You are a concise assistant." \
   --temp 0.5
 ```
