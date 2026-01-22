@@ -68,8 +68,8 @@ const llama_attention_type = enum(c_int) {
 };
 
 // Placeholder types for callbacks
-const ggml_backend_sched_eval_callback = ?*const fn() callconv(.C) void; // Placeholder signature
-const ggml_abort_callback = ?*const fn(user_data: ?*anyopaque) callconv(.C) bool; // Placeholder signature
+const ggml_backend_sched_eval_callback = ?*const fn() callconv(.c) void; // Placeholder signature
+const ggml_abort_callback = ?*const fn(user_data: ?*anyopaque) callconv(.c) bool; // Placeholder signature
 
 // Structs (simplified - add fields as needed)
 const llama_batch = extern struct {
@@ -103,7 +103,7 @@ const llama_model_params = extern struct {
 const ggml_backend_dev_t = opaque {}; // Opaque struct
 const llama_model_tensor_buft_override = opaque {}; // Opaque struct
 // Define the function signature type first
-const llama_progress_callback_sig = fn (progress: f32, user_data: ?*anyopaque) callconv(.C) bool;
+const llama_progress_callback_sig = fn (progress: f32, user_data: ?*anyopaque) callconv(.c) bool;
 // Now define the callback type as an optional pointer to that signature for extern struct compatibility
 const llama_progress_callback = ?*const llama_progress_callback_sig;
 const llama_model_kv_override = opaque {}; // Opaque struct
@@ -211,7 +211,7 @@ const llama_sampling_params = extern struct {
 };
 
 // Define the C function signature type
-const ggml_log_callback_sig = fn (level: ggml_log_level, text: [*c]const u8, user_data: ?*anyopaque) callconv(.C) void;
+const ggml_log_callback_sig = fn (level: ggml_log_level, text: [*c]const u8, user_data: ?*anyopaque) callconv(.c) void;
 // Define the type alias for the extern function parameter (optional pointer to the signature)
 const ggml_log_callback_extern_t = ?*const ggml_log_callback_sig;
 
@@ -282,7 +282,7 @@ const ggml_log_level = enum(c_int) {
 };
 
 // Define the callback function
-fn logCallback(level: ggml_log_level, text: [*c]const u8, user_data: ?*anyopaque) callconv(.C) void { // Added callconv(.C)
+fn logCallback(level: ggml_log_level, text: [*c]const u8, user_data: ?*anyopaque) callconv(.c) void {
     _ = user_data; // Unused for this simple callback
     // Switch on the underlying integer value to handle potential undefined values from C
     const level_int = @intFromEnum(level);
@@ -461,39 +461,31 @@ pub fn main() !void {
     print("Temperature: {d:.2}\n", .{args.temperature});
     print("Enter your message (Ctrl+D or /quit to exit):\n", .{});
 
-    var history = std.ArrayList(Message).init(allocator);
+    var history = try std.ArrayList(Message).initCapacity(allocator, 0);
     defer {
         for (history.items) |msg| {
-            // Assuming roles are static strings, only free content
             allocator.free(msg.content);
         }
-        history.deinit();
+        history.deinit(allocator);
     }
 
-    const stdin = io.getStdIn().reader();
-    const stdout_file = io.getStdOut(); // Get the File object
-    const stdout = stdout_file.writer(); // Get the writer from the File
-    var input_buffer = std.ArrayList(u8).init(allocator);
-    defer input_buffer.deinit();
+    var stdin_file = std.fs.File.stdin();
+    defer stdin_file.close();
+
+    var input_buffer = try std.ArrayList(u8).initCapacity(allocator, 128);
+    defer input_buffer.deinit(allocator);
 
     // --- Chat Loop ---
     while (true) {
-        try stdout.print("> ", .{});
-        // No need to sync stdout here
+        print("> ", .{});
 
-        input_buffer.clearRetainingCapacity();
-        stdin.streamUntilDelimiter(input_buffer.writer(), '\n', null) catch |err| {
-            if (err == error.EndOfStream) { // Ctrl+D
-                print("\nExiting...\n", .{});
-                break;
-            } else {
-                print("Error reading input: {}\n", .{err});
-                return err;
-            }
-        };
+        const nread = try stdin_file.readAll(input_buffer.items[0..128]);
+        if (nread == 0) {
+            print("\nExiting...\n", .{});
+            break;
+        }
 
         const user_input = std.mem.trim(u8, input_buffer.items, " \t\r\n");
-
         if (user_input.len == 0) continue;
         if (std.mem.eql(u8, user_input, "/quit")) {
             print("Exiting...\n", .{});
@@ -501,30 +493,30 @@ pub fn main() !void {
         }
 
         // --- Prepare Prompt using llama_chat_apply_template ---
-        var current_chat = std.ArrayList(llama_chat_message).init(allocator);
-        defer current_chat.deinit();
+        var current_chat = try std.ArrayList(llama_chat_message).initCapacity(allocator, 0);
+        defer current_chat.deinit(allocator);
 
         // Add system prompt
         const c_system_role = try toCString("system");
         defer allocator.free(c_system_role);
         const c_system_prompt = try toCString(args.system_prompt);
         defer allocator.free(c_system_prompt);
-        try current_chat.append(.{ .role = c_system_role, .content = c_system_prompt });
+        try current_chat.append(allocator, .{ .role = c_system_role, .content = c_system_prompt });
 
         // Add history messages (need to convert Zig strings to C strings temporarily)
-        var temp_slices = std.ArrayList([:0]const u8).init(allocator); // Store sentinel slices for freeing
+        var temp_slices = try std.ArrayList([:0]const u8).initCapacity(allocator, 0);
         defer {
             for (temp_slices.items) |slice_to_free| {
                 allocator.free(slice_to_free);
             }
-            temp_slices.deinit(); // Deinit the correct list
+            temp_slices.deinit(allocator);
         }
         for (history.items) |msg| {
             const c_role = try toCString(msg.role);
-            try temp_slices.append(c_role); // Track slice for freeing
+            try temp_slices.append(allocator, c_role); // Track slice for freeing
             const c_content = try toCString(msg.content);
-            try temp_slices.append(c_content); // Track slice for freeing
-            try current_chat.append(.{ .role = c_role, .content = c_content });
+            try temp_slices.append(allocator, c_content); // Track slice for freeing
+            try current_chat.append(allocator, .{ .role = c_role, .content = c_content });
         }
 
         // Add current user input
@@ -532,13 +524,13 @@ pub fn main() !void {
         defer allocator.free(c_user_role);
         const c_user_input = try toCString(user_input);
         defer allocator.free(c_user_input);
-        try current_chat.append(.{ .role = c_user_role, .content = c_user_input });
+        try current_chat.append(allocator, .{ .role = c_user_role, .content = c_user_input });
 
         // Apply the template
-        var formatted_prompt_buf = std.ArrayList(u8).init(allocator);
-        defer formatted_prompt_buf.deinit();
+        var formatted_prompt_buf = try std.ArrayList(u8).initCapacity(allocator, 2048);
+        defer formatted_prompt_buf.deinit(allocator);
         const initial_buf_size: i32 = 2048; // Start with a reasonable buffer size
-        try formatted_prompt_buf.resize(@intCast(initial_buf_size)); // Target usize inferred
+        try formatted_prompt_buf.resize(allocator, @intCast(initial_buf_size));
 
         var required_len = llama_chat_apply_template(
             model, // Use model's default template
@@ -547,7 +539,7 @@ pub fn main() !void {
             current_chat.items.len,
             true, // Add assistant start token
             formatted_prompt_buf.items.ptr,
-            initial_buf_size,
+            @intCast(formatted_prompt_buf.items.len),
         );
 
         if (required_len < 0) {
@@ -558,7 +550,7 @@ pub fn main() !void {
         if (@as(u32, @intCast(required_len)) > initial_buf_size) {
             // Buffer was too small, resize and try again
             print("Resizing chat template buffer to {d} bytes\n", .{required_len});
-            try formatted_prompt_buf.resize(@intCast(required_len)); // Target usize inferred
+            try formatted_prompt_buf.resize(allocator, @intCast(required_len));
             required_len = llama_chat_apply_template(
                 model, null, current_chat.items.ptr, current_chat.items.len, true,
                 formatted_prompt_buf.items.ptr, required_len
@@ -609,9 +601,8 @@ pub fn main() !void {
         print("Prompt decoded successfully.\n", .{});
 
         // --- Generation Loop ---
-        var generated_response = std.ArrayList(u8).init(allocator);
-        defer generated_response.deinit();
-        const writer = generated_response.writer();
+        var generated_response = try std.ArrayList(u8).initCapacity(allocator, 0);
+        defer generated_response.deinit(allocator);
 
         const cur_pos: llama_pos = @intCast(n_tokens); // Changed var to const
         const max_new_tokens = n_ctx - @as(u32, @intCast(n_tokens)); // Cast n_tokens to u32 for subtraction
@@ -672,9 +663,9 @@ pub fn main() !void {
                  break;
              }
 
-            try stdout.print("{s}", .{piece_buf});
+            print("{s}", .{piece_buf});
             // No need to sync stdout after every piece
-            try writer.writeAll(piece_buf);
+            try generated_response.appendSlice(allocator, piece_buf);
 
             // Prepare for next token - Manual batch construction (Attempt 2)
             // Ensure all fields match llama.h and null indicates default behavior
@@ -699,17 +690,17 @@ pub fn main() !void {
             // cur_pos += 1; // Let llama_decode manage position tracking for single tokens when pos=null
             generated_token_count += 1;
         }
-        try stdout.print("\n", .{}); // Newline after assistant response
+        try generated_response.appendSlice(allocator, "\n");
 
         // --- Update History ---
         const user_input_copy = try allocator.dupe(u8, user_input);
         errdefer allocator.free(user_input_copy);
         // Use the actual generated response
-        const assistant_response_copy = try generated_response.toOwnedSlice();
+        const assistant_response_copy = try generated_response.toOwnedSlice(allocator);
         errdefer allocator.free(assistant_response_copy);
 
-        try history.append(.{ .role = "user", .content = user_input_copy });
-        try history.append(.{ .role = "assistant", .content = assistant_response_copy });
+        try history.append(allocator, .{ .role = "user", .content = user_input_copy });
+        try history.append(allocator, .{ .role = "assistant", .content = assistant_response_copy });
 
         // Sampling context is freed by defer
 
