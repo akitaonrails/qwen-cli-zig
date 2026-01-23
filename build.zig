@@ -1,14 +1,16 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) anyerror!void {
+pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
         .name = "qwen_cli",
-        .root_source_file = b.path("src/qwen_cli.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     // --- Llama.cpp Configuration ---
